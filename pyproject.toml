@@ -1,0 +1,19 @@
+[project]
+name = "review-board"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0",
+    "litellm>=1.81.15",
+]
+
+[project.scripts]
+review-board = "review_board.cli:main_review"
+validate-state = "review_board.cli:main_validate"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/review_board"]

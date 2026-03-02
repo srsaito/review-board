@@ -1,0 +1,20 @@
+# Example LiteLLM proxy config for review-board.
+# Copy to your project and customize. Start proxy with:
+#   litellm --config config/litellm.yaml
+#
+# Then pass --api-base http://127.0.0.1:4000 to review-board.
+
+model_list:
+  - model_name: review_chatgpt
+    litellm_params:
+      model: openai/gpt-4.1
+
+  - model_name: review_gemini
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+      api_base: https://generativelanguage.googleapis.com/v1beta
+      response_mime_type: text/plain
+
+litellm_settings:
+  success_callback: ["sqlite"]
