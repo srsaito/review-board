@@ -38,6 +38,25 @@ from review_board.schemas import ReviewerOutput
 DEFAULT_CHATGPT_MODEL = "review_chatgpt"
 DEFAULT_GEMINI_MODEL = "review_gemini"
 DEFAULT_CLAUDE_MODEL = "sonnet"
+DEFAULT_REASONING_EFFORT = "low"
+
+# Reasoning model registry
+# ~~~~~~~~~~~~~~~~~~~~~~~~
+# Reasoning models (e.g. GPT-5 family) reject the `temperature` parameter and
+# require `reasoning_effort` instead.  LiteLLM's client-side validation doesn't
+# know about our proxy aliases, so we pass reasoning_effort via `extra_body` to
+# bypass validation and let the proxy forward it to the provider.
+#
+# When adding a new reasoning model:
+#   1. Add its LiteLLM proxy alias to REASONING_MODEL_ALIASES below.
+#   2. Add the corresponding entry in config/litellm.yaml (and litellm-example.yaml).
+#   3. That's it — call_model() and retry_fix_json() will automatically use
+#      reasoning_effort (via extra_body) instead of temperature for any alias
+#      listed here.
+#
+# When adding a non-reasoning model, no changes are needed here — just add it
+# to the litellm config.  Temperature is sent by default for unlisted aliases.
+REASONING_MODEL_ALIASES = {"review_chatgpt"}
 
 REVIEW_RUBRIC = """Review Rubric:
 - Correctness: aligns with SYSTEM_DESIGN.md constraints
@@ -169,19 +188,41 @@ def make_session_dir(base: Path, artifact_path: str, artifact_sha: str) -> Path:
 # Model call + validation
 # ----------------------------
 
-def call_model(model: str, system_msg: str, user_msg: str, temperature: float, max_tokens: int, api_base: str) -> str:
+def _is_reasoning_model(model: str) -> bool:
+    """Check if a model alias maps to a reasoning model (no temperature support)."""
+    return model in REASONING_MODEL_ALIASES
+
+
+def call_model(
+    model: str,
+    system_msg: str,
+    user_msg: str,
+    temperature: float,
+    max_tokens: int,
+    api_base: str,
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+) -> str:
     # Proxy speaks OpenAI protocol; prefix tells litellm client which provider to use
     routed_model = f"openai/{model}" if not model.startswith("openai/") else model
-    res = completion(
+
+    kwargs: Dict[str, Any] = dict(
         model=routed_model,
         messages=[
             {"role": "system", "content": system_msg},
             {"role": "user", "content": user_msg},
         ],
-        temperature=temperature,
         max_tokens=max_tokens,
         api_base=api_base,
     )
+
+    if _is_reasoning_model(model):
+        # Pass via extra_body to bypass litellm's client-side param validation,
+        # since the proxy alias isn't recognized as a reasoning model.
+        kwargs["extra_body"] = {"reasoning_effort": reasoning_effort}
+    else:
+        kwargs["temperature"] = temperature
+
+    res = completion(**kwargs)
     return res.choices[0].message.content
 
 
@@ -227,7 +268,14 @@ def parse_validate_reviewer(text: str) -> ReviewerOutput:
     return ReviewerOutput.model_validate(data)
 
 
-def retry_fix_json(model: str, bad_text: str, temperature: float, max_tokens: int, api_base: str) -> str:
+def retry_fix_json(
+    model: str,
+    bad_text: str,
+    temperature: float,
+    max_tokens: int,
+    api_base: str,
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+) -> str:
     fix_prompt = f"""Your previous output was invalid JSON or did not match the schema.
 Return ONLY a single valid JSON object matching the schema. No prose.
 
@@ -239,16 +287,23 @@ Here is your previous output for correction:
     fix_prompt += bad_text
     fix_prompt += "\n>>>\n"
     routed_model = f"openai/{model}" if not model.startswith("openai/") else model
-    res = completion(
+
+    kwargs: Dict[str, Any] = dict(
         model=routed_model,
         messages=[
             {"role": "system", "content": SYSTEM_MSG},
             {"role": "user", "content": fix_prompt},
         ],
-        temperature=temperature,
         max_tokens=max_tokens,
         api_base=api_base,
     )
+
+    if _is_reasoning_model(model):
+        kwargs["extra_body"] = {"reasoning_effort": reasoning_effort}
+    else:
+        kwargs["temperature"] = temperature
+
+    res = completion(**kwargs)
     return res.choices[0].message.content
 
 
@@ -267,6 +322,7 @@ def run_review(
     api_base: str = "",
     claude_reviewer: bool = False,
     claude_model: str = DEFAULT_CLAUDE_MODEL,
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT,
 ) -> Dict[str, Any]:
     """Run multi-model review and return result dict."""
     artifact_text = read_text(artifact_path)
@@ -278,7 +334,7 @@ def run_review(
     models = {"chatgpt": chatgpt_model, "gemini": gemini_model}
     if claude_reviewer:
         models["claude"] = claude_model
-    params = {"temperature": temperature, "max_tokens": max_tokens}
+    params = {"temperature": temperature, "max_tokens": max_tokens, "reasoning_effort": reasoning_effort}
 
     session_dir = make_session_dir(Path(out_base), artifact_path, artifact_sha)
     ensure_dir(session_dir)
@@ -307,7 +363,7 @@ def run_review(
         if alias == "claude":
             raw = call_claude_cli(SYSTEM_MSG, user_msg, model=model)
         else:
-            raw = call_model(model, SYSTEM_MSG, user_msg, temperature, max_tokens, api_base)
+            raw = call_model(model, SYSTEM_MSG, user_msg, temperature, max_tokens, api_base, reasoning_effort)
 
         # Save raw for audit even if invalid
         (session_dir / f"turn1_{alias}_raw.txt").write_text(raw, encoding="utf-8")
@@ -328,7 +384,7 @@ def run_review(
                 )
                 fixed = call_claude_cli(SYSTEM_MSG, fix_prompt, model=model)
             else:
-                fixed = retry_fix_json(model, raw, temperature, max_tokens, api_base)
+                fixed = retry_fix_json(model, raw, temperature, max_tokens, api_base, reasoning_effort)
             (session_dir / f"turn1_{alias}_raw_retry.txt").write_text(fixed, encoding="utf-8")
             try:
                 ro = parse_validate_reviewer(fixed)

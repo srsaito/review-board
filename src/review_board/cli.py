@@ -14,6 +14,7 @@ from review_board.bridge import (
     DEFAULT_CHATGPT_MODEL,
     DEFAULT_CLAUDE_MODEL,
     DEFAULT_GEMINI_MODEL,
+    DEFAULT_REASONING_EFFORT,
     run_review,
 )
 from review_board.validator import validate_state
@@ -39,6 +40,9 @@ def main_review() -> None:
     ap.add_argument("--max-tokens", type=int, default=8192)
     ap.add_argument("--api-base", default="http://127.0.0.1:4000",
                     help="LiteLLM proxy base URL (default: http://127.0.0.1:4000)")
+    ap.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT,
+                    choices=["none", "low", "medium", "high", "xhigh"],
+                    help="Reasoning effort for reasoning models like GPT-5 (default: low)")
     ap.add_argument("--claude-reviewer", action="store_true",
                     help="Enable Claude Code CLI as third reviewer (uses subscription)")
     ap.add_argument("--claude-model", default=DEFAULT_CLAUDE_MODEL,
@@ -58,6 +62,7 @@ def main_review() -> None:
         api_base=args.api_base,
         claude_reviewer=args.claude_reviewer,
         claude_model=args.claude_model,
+        reasoning_effort=args.reasoning_effort,
     )
 
     print(json.dumps(result))
