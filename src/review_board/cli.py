@@ -37,18 +37,13 @@ def main_review() -> None:
     ap.add_argument("--gemini-model", default=DEFAULT_GEMINI_MODEL)
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--max-tokens", type=int, default=8192)
-    ap.add_argument("--api-base", default=None,
-                    help="LiteLLM proxy base URL, e.g. http://127.0.0.1:4000 (required)")
+    ap.add_argument("--api-base", default="http://127.0.0.1:4000",
+                    help="LiteLLM proxy base URL (default: http://127.0.0.1:4000)")
     ap.add_argument("--claude-reviewer", action="store_true",
                     help="Enable Claude Code CLI as third reviewer (uses subscription)")
     ap.add_argument("--claude-model", default=DEFAULT_CLAUDE_MODEL,
                     help="Claude model for CLI reviewer (sonnet|opus|haiku)")
     args = ap.parse_args()
-
-    if not args.api_base:
-        print("ERROR: --api-base is required (start LiteLLM proxy and pass its URL).",
-              file=sys.stderr)
-        sys.exit(1)
 
     ref_paths = [p.strip() for p in args.reference_docs.split(",")]
 

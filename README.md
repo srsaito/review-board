@@ -39,14 +39,9 @@ Each reviewer scores the artifact on correctness, completeness, testability, ris
 ## Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/srsaito/review-board.git
 cd review-board
-
-# Install in a virtual environment
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
+uv tool install -e .
 ```
 
 This installs two CLI commands:
@@ -58,7 +53,31 @@ This installs two CLI commands:
 
 ## Setup
 
-### 1. Configure API keys
+### 1. Install the Claude Code skill
+
+The `/review` skill lets you run the full pipeline (reviewers + moderation + validation) from inside Claude Code.
+
+**Option A: All projects (user-level)**
+
+```bash
+mkdir -p ~/.claude/skills/review
+cp skill/SKILL.md ~/.claude/skills/review/SKILL.md
+```
+
+Makes `/review` available in every project on this machine.
+
+**Option B: Single project (project-level)**
+
+```bash
+mkdir -p <project>/.claude/skills/review
+cp skill/SKILL.md <project>/.claude/skills/review/SKILL.md
+```
+
+Makes `/review` available only in that project. Useful if you want to customize defaults (e.g., hardcode `--reference-docs` for that project).
+
+If both exist, the project-level skill overrides the user-level one.
+
+### 2. Configure API keys
 
 Set environment variables for the providers you plan to use:
 
@@ -104,16 +123,14 @@ The proxy runs on `http://127.0.0.1:4000` by default.
 
 ```bash
 review-board <artifact> \
-  --reference-docs <doc1>,<doc2> \
-  --api-base http://127.0.0.1:4000
+  --reference-docs <doc1>,<doc2>
 ```
 
 **Example:**
 
 ```bash
 review-board docs/plan/EP-04-tasks.md \
-  --reference-docs docs/architecture/SYSTEM_DESIGN.md \
-  --api-base http://127.0.0.1:4000
+  --reference-docs docs/architecture/SYSTEM_DESIGN.md
 ```
 
 The command outputs a JSON result to stdout with the session directory and paths to reviewer outputs:
@@ -134,7 +151,7 @@ The command outputs a JSON result to stdout with the session directory and paths
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--reference-docs` | *(required)* | Comma-separated paths to reference documents |
-| `--api-base` | *(required)* | LiteLLM proxy URL |
+| `--api-base` | `http://127.0.0.1:4000` | LiteLLM proxy URL |
 | `--out-base` | `docs/reviews` | Output directory for review sessions |
 | `--chatgpt-model` | `review_chatgpt` | Model alias for ChatGPT reviewer |
 | `--gemini-model` | `review_gemini` | Model alias for Gemini reviewer |
@@ -184,6 +201,8 @@ docs/reviews/EP-04-tasks-20260308-143022-a1b2c3d4/
 ├── turn1_gemini.json         # Validated Gemini review
 └── state_turn1.json          # Moderated state (after moderation)
 ```
+
+Review sessions are ephemeral development artifacts. Consider adding `docs/reviews/*/` to your project's `.gitignore`.
 
 ## License
 

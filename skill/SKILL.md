@@ -64,7 +64,7 @@ Set `stop_recommendation`:
 ## 2) Run Turn 1 (initial critique; installed CLI)
 Execute:
 
-`review-board $0 --reference-docs <comma-separated-paths> --api-base http://127.0.0.1:4000`
+`review-board $0 --reference-docs <comma-separated-paths>`
 
 Capture stdout JSON and extract:
 - `session_dir`
