@@ -23,7 +23,7 @@ import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from litellm import completion
 from pydantic import ValidationError
@@ -75,7 +75,6 @@ Do not include any prose outside the JSON object.
 
 SCHEMA_HINT = """Required JSON schema (high level):
 {
-  "model": "string",
   "overall_assessment": "pass|revise|block",
   "scores": {
     "correctness": 1-5,
@@ -162,6 +161,31 @@ def write_json(path: Path, obj: Any) -> None:
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def resolve_model_names(api_base: str, aliases: List[str]) -> Dict[str, str]:
+    """Query the LiteLLM proxy to resolve aliases to their litellm_params.model.
+
+    Returns a dict like {"review_gemini": "gemini/gemini-3.1-pro-preview"}.
+    Falls back to the alias itself if the proxy is unreachable.
+    """
+    import urllib.request
+    mapping: Dict[str, str] = {}
+    try:
+        url = f"{api_base.rstrip('/')}/v1/model/info"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            data = json.loads(resp.read())
+        for entry in data.get("data", []):
+            name = entry.get("model_name", "")
+            if name in aliases:
+                mapping[name] = entry.get("litellm_params", {}).get("model", name)
+    except Exception:
+        pass
+    # Fall back to alias for any that weren't resolved
+    for alias in aliases:
+        if alias not in mapping:
+            mapping[alias] = alias
+    return mapping
+
+
 # ----------------------------
 # Runtime metadata
 # ----------------------------
@@ -193,6 +217,30 @@ def _is_reasoning_model(model: str) -> bool:
     return model in REASONING_MODEL_ALIASES
 
 
+def _extract_provider_metadata(res: Any) -> Dict[str, Any]:
+    """Pull provider-specific fields from the litellm response.
+
+    These fields vary by provider (e.g. vertex_ai_* for Gemini) and serve as
+    evidence of which backend actually served the request.
+    """
+    meta: Dict[str, Any] = {"response_model": res.model}
+    extra = getattr(res, "model_extra", None) or {}
+    for key, val in extra.items():
+        # Skip usage (already captured elsewhere) and None values
+        if key == "usage" or val is None:
+            continue
+        # Keep provider-indicator fields even when empty (e.g. vertex_ai_*
+        # lists are empty but their *presence* proves the provider).
+        meta[key] = val
+    # Provider-specific message fields (e.g. thought_signatures for Gemini)
+    choice = res.choices[0] if res.choices else None
+    if choice:
+        prov = getattr(choice.message, "provider_specific_fields", None)
+        if prov:
+            meta["message_provider_fields"] = prov
+    return meta
+
+
 def call_model(
     model: str,
     system_msg: str,
@@ -201,7 +249,12 @@ def call_model(
     max_tokens: int,
     api_base: str,
     reasoning_effort: str = DEFAULT_REASONING_EFFORT,
-) -> str:
+) -> Tuple[str, Dict[str, Any]]:
+    """Call a model via LiteLLM proxy.
+
+    Returns (content, provider_metadata) where provider_metadata contains
+    provider-specific response fields for verifying the actual backend.
+    """
     # Proxy speaks OpenAI protocol; prefix tells litellm client which provider to use
     routed_model = f"openai/{model}" if not model.startswith("openai/") else model
 
@@ -213,17 +266,19 @@ def call_model(
         ],
         max_tokens=max_tokens,
         api_base=api_base,
+        num_retries=0,
     )
 
     if _is_reasoning_model(model):
         # Pass via extra_body to bypass litellm's client-side param validation,
         # since the proxy alias isn't recognized as a reasoning model.
-        kwargs["extra_body"] = {"reasoning_effort": reasoning_effort}
+        kwargs["extra_body"] = {"reasoning_effort": reasoning_effort, "disable_fallbacks": True}
     else:
         kwargs["temperature"] = temperature
+        kwargs["extra_body"] = {"disable_fallbacks": True}
 
     res = completion(**kwargs)
-    return res.choices[0].message.content
+    return res.choices[0].message.content, _extract_provider_metadata(res)
 
 
 def call_claude_cli(system_msg: str, user_msg: str, model: str = "sonnet") -> str:
@@ -275,7 +330,7 @@ def retry_fix_json(
     max_tokens: int,
     api_base: str,
     reasoning_effort: str = DEFAULT_REASONING_EFFORT,
-) -> str:
+) -> Tuple[str, Dict[str, Any]]:
     fix_prompt = f"""Your previous output was invalid JSON or did not match the schema.
 Return ONLY a single valid JSON object matching the schema. No prose.
 
@@ -296,15 +351,17 @@ Here is your previous output for correction:
         ],
         max_tokens=max_tokens,
         api_base=api_base,
+        num_retries=0,
     )
 
     if _is_reasoning_model(model):
-        kwargs["extra_body"] = {"reasoning_effort": reasoning_effort}
+        kwargs["extra_body"] = {"reasoning_effort": reasoning_effort, "disable_fallbacks": True}
     else:
         kwargs["temperature"] = temperature
+        kwargs["extra_body"] = {"disable_fallbacks": True}
 
     res = completion(**kwargs)
-    return res.choices[0].message.content
+    return res.choices[0].message.content, _extract_provider_metadata(res)
 
 
 # ----------------------------
@@ -336,6 +393,10 @@ def run_review(
         models["claude"] = claude_model
     params = {"temperature": temperature, "max_tokens": max_tokens, "reasoning_effort": reasoning_effort}
 
+    # Resolve proxy aliases to actual model names (e.g. review_gemini -> gemini/gemini-3.1-pro-preview)
+    proxy_aliases = [m for a, m in models.items() if a != "claude"]
+    resolved_models = resolve_model_names(api_base, proxy_aliases) if api_base else {}
+
     session_dir = make_session_dir(Path(out_base), artifact_path, artifact_sha)
     ensure_dir(session_dir)
 
@@ -360,17 +421,28 @@ def run_review(
     status_by_model: Dict[str, str] = {}
 
     for alias, model in models.items():
+        provider_meta: Optional[Dict[str, Any]] = None
+
         if alias == "claude":
             raw = call_claude_cli(SYSTEM_MSG, user_msg, model=model)
         else:
-            raw = call_model(model, SYSTEM_MSG, user_msg, temperature, max_tokens, api_base, reasoning_effort)
+            raw, provider_meta = call_model(model, SYSTEM_MSG, user_msg, temperature, max_tokens, api_base, reasoning_effort)
 
         # Save raw for audit even if invalid
         (session_dir / f"turn1_{alias}_raw.txt").write_text(raw, encoding="utf-8")
 
+        # Stamp the resolved model name and provider metadata onto a validated output.
+        def _stamp(ro: ReviewerOutput) -> ReviewerOutput:
+            if alias == "claude":
+                ro.model = f"claude/{model}"
+            else:
+                ro.model = resolved_models.get(model, model)
+            ro.provider_metadata = provider_meta
+            return ro
+
         # Validate; retry once if needed
         try:
-            ro = parse_validate_reviewer(raw)
+            ro = _stamp(parse_validate_reviewer(raw))
             write_json(session_dir / f"turn1_{alias}.json", ro.model_dump())
             outputs[alias] = str(session_dir / f"turn1_{alias}.json")
             status_by_model[alias] = "ok"
@@ -384,10 +456,10 @@ def run_review(
                 )
                 fixed = call_claude_cli(SYSTEM_MSG, fix_prompt, model=model)
             else:
-                fixed = retry_fix_json(model, raw, temperature, max_tokens, api_base, reasoning_effort)
+                fixed, provider_meta = retry_fix_json(model, raw, temperature, max_tokens, api_base, reasoning_effort)
             (session_dir / f"turn1_{alias}_raw_retry.txt").write_text(fixed, encoding="utf-8")
             try:
-                ro = parse_validate_reviewer(fixed)
+                ro = _stamp(parse_validate_reviewer(fixed))
                 write_json(session_dir / f"turn1_{alias}.json", ro.model_dump())
                 outputs[alias] = str(session_dir / f"turn1_{alias}.json")
                 status_by_model[alias] = "ok_after_retry"

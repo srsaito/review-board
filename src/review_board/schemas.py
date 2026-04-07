@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -114,10 +114,23 @@ class Issue(BaseModel):
 class ReviewerOutput(BaseModel):
     """
     The required JSON format that ChatGPT/Gemini must return.
+
+    The model and provider_metadata fields are set by bridge code after
+    parsing, not by the LLM.  ``model`` is the litellm_params.model string
+    from the proxy config (e.g. "gemini/gemini-3.1-pro-preview");
+    ``provider_metadata`` holds provider-specific response fields that can
+    be used to verify the actual provider that served the request.
     """
     model_config = ConfigDict(extra="forbid")
 
-    model: str  # free-form identifier, since providers vary
+    model: Optional[str] = Field(
+        default=None,
+        description="Resolved model from LiteLLM proxy config — set by bridge, not the LLM.",
+    )
+    provider_metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Provider-specific response fields (e.g. vertex_ai_* for Gemini) — set by bridge.",
+    )
     overall_assessment: OverallAssessment
 
     scores: Dict[str, int] = Field(
