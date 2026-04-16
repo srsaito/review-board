@@ -1,8 +1,11 @@
 # Example LiteLLM proxy config for review-board.
-# Copy to your project and customize. Start proxy with:
-#   litellm --config config/litellm.yaml
+# The proxy config is user-level (shared across projects). Install with:
+#   mkdir -p ~/.config/litellm
+#   cp config/litellm-example.yaml ~/.config/litellm/config.yaml
+# Then start the proxy:
+#   litellm --config ~/.config/litellm/config.yaml
 #
-# Then pass --api-base http://127.0.0.1:4000 to review-board.
+# Pass --api-base http://127.0.0.1:4000 to review-board.
 
 model_list:
   - model_name: review_chatgpt

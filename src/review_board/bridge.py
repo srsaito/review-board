@@ -49,7 +49,7 @@ DEFAULT_REASONING_EFFORT = "low"
 #
 # When adding a new reasoning model:
 #   1. Add its LiteLLM proxy alias to REASONING_MODEL_ALIASES below.
-#   2. Add the corresponding entry in config/litellm.yaml (and litellm-example.yaml).
+#   2. Add the corresponding entry in ~/.config/litellm/config.yaml (and update the repo's litellm-example.yaml template).
 #   3. That's it — call_model() and retry_fix_json() will automatically use
 #      reasoning_effort (via extra_body) instead of temperature for any alias
 #      listed here.

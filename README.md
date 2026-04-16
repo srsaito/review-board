@@ -88,13 +88,16 @@ export GEMINI_API_KEY="..."
 
 ### 2. Configure and start the LiteLLM proxy
 
-Copy the example config and customize it:
+The proxy config is user-level (shared across projects that use the same LiteLLM
+instance, e.g. review-board + voice-chatbot). Copy the example config to
+`~/.config/litellm/` and customize it:
 
 ```bash
-cp config/litellm-example.yaml config/litellm.yaml
+mkdir -p ~/.config/litellm
+cp config/litellm-example.yaml ~/.config/litellm/config.yaml
 ```
 
-Edit `config/litellm.yaml` to set your preferred models. The defaults are:
+Edit `~/.config/litellm/config.yaml` to set your preferred models. The defaults are:
 
 ```yaml
 model_list:
@@ -112,7 +115,7 @@ model_list:
 Start the proxy:
 
 ```bash
-litellm --config config/litellm.yaml
+litellm --config ~/.config/litellm/config.yaml
 ```
 
 The proxy runs on `http://127.0.0.1:4000` by default.
